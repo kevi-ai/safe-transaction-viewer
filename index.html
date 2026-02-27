@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>owockibot Safe Transaction Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #eee;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, #00d4ff, #7b2ff7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .safe-address {
+            font-family: monospace;
+            background: rgba(255,255,255,0.1);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            display: inline-block;
+            margin-top: 0.5rem;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            padding: 1.5rem;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        .stat-label {
+            color: #888;
+            margin-top: 0.5rem;
+        }
+        .transactions {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .tx-header {
+            padding: 1rem 1.5rem;
+            background: rgba(255,255,255,0.1);
+            font-weight: bold;
+            display: grid;
+            grid-template-columns: 150px 120px 1fr 150px 100px;
+            gap: 1rem;
+            align-items: center;
+        }
+        .tx-row {
+            padding: 1rem 1.5rem;
+            display: grid;
+            grid-template-columns: 150px 120px 1fr 150px 100px;
+            gap: 1rem;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            transition: background 0.2s;
+        }
+        .tx-row:hover {
+            background: rgba(255,255,255,0.05);
+        }
+        .tx-row:last-child {
+            border-bottom: none;
+        }
+        .tx-hash {
+            color: #00d4ff;
+            text-decoration: none;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        .tx-hash:hover {
+            text-decoration: underline;
+        }
+        .tx-type {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            text-align: center;
+        }
+        .type-transfer {
+            background: rgba(0, 212, 255, 0.2);
+            color: #00d4ff;
+        }
+        .type-swap {
+            background: rgba(123, 47, 247, 0.2);
+            color: #7b2ff7;
+        }
+        .type-approval {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+        }
+        .type-unknown {
+            background: rgba(255, 255, 255, 0.1);
+            color: #888;
+        }
+        .amount {
+            font-weight: bold;
+            color: #00ff88;
+        }
+        .recipient {
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #888;
+        }
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #888;
+        }
+        .error {
+            text-align: center;
+            padding: 3rem;
+            color: #ff4444;
+        }
+        @media (max-width: 768px) {
+            .tx-header {
+                display: none;
+            }
+            .tx-row {
+                grid-template-columns: 1fr;
+                gap: 0.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔍 owockibot Safe Transaction Viewer</h1>
+            <div class="safe-address">0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be</div>
+        </header>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="totalTx">-</div>
+                <div class="stat-label">Total Transactions</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalIn">-</div>
+                <div class="stat-label">Total In (USDC)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalOut">-</div>
+                <div class="stat-label">Total Out (USDC)</div>
+            </div>
+        </div>
+
+        <div class="transactions">
+            <div class="tx-header">
+                <div>Date</div>
+                <div>Type</div>
+                <div>Details</div>
+                <div>Recipient</div>
+                <div>Amount</div>
+            </div>
+            <div id="txList">
+                <div class="loading">Loading transactions...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SAFE_ADDRESS = '0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be';
+        const BASE_SAFE_API = 'https://safe-transaction-base.safe.global/api/v1';
+        const BASESCAN_URL = 'https://basescan.org/tx/';
+
+        // Token info
+        const USDC_ADDRESS = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'.toLowerCase();
+
+        async function fetchTransactions() {
+            try {
+                // Fetch safe transactions
+                const url = `${BASE_SAFE_API}/safes/${SAFE_ADDRESS}/transactions/`;
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                return data.results || [];
+            } catch (error) {
+                console.error('Error fetching transactions:', error);
+                return [];
+            }
+        }
+
+        function formatDate(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function getTxType(tx) {
+            // Check various transaction types
+            if (tx.txType === 'TRANSFER') return 'transfer';
+            if (tx.txType === 'SETTINGS_CHANGE') return 'settings';
+            if (tx.detailedExecutionInfo?.type === 'EXECUTION') return 'execution';
+            
+            // Check for token transfers
+            if (tx.transfers && tx.transfers.length > 0) {
+                return 'transfer';
+            }
+            
+            return 'unknown';
+        }
+
+        function truncateAddress(addr) {
+            if (!addr) return '-';
+            return addr.slice(0, 6) + '...' + addr.slice(-4);
+        }
+
+        function renderTransactions(transactions) {
+            const txList = document.getElementById('txList');
+            
+            if (transactions.length === 0) {
+                txList.innerHTML = '<div class="error">No transactions found</div>';
+                return;
+            }
+
+            let totalIn = 0;
+            let totalOut = 0;
+
+            const html = transactions.slice(0, 50).map(tx => {
+                const type = getTxType(tx);
+                const typeClass = `type-${type}`;
+                const timestamp = tx.executionDate || tx.submissionDate || Date.now();
+                const txHash = tx.transactionHash || tx.safeTxHash;
+                
+                // Extract transfer info
+                let amount = '-';
+                let recipient = '-';
+                
+                if (tx.transfers && tx.transfers.length > 0) {
+                    const transfer = tx.transfers[0];
+                    const isIncoming = transfer.to.toLowerCase() === SAFE_ADDRESS.toLowerCase();
+                    
+                    if (transfer.tokenAddress && transfer.tokenAddress.toLowerCase() === USDC_ADDRESS) {
+                        const value = parseFloat(transfer.value) / 1e6;
+                        amount = `${isIncoming ? '+' : '-'}${value.toFixed(2)} USDC`;
+                        
+                        if (isIncoming) totalIn += value;
+                        else totalOut += value;
+                    } else if (!transfer.tokenAddress) {
+                        // Native ETH transfer
+                        const value = parseFloat(transfer.value) / 1e18;
+                        amount = `${isIncoming ? '+' : '-'}${value.toFixed(4)} ETH`;
+                    }
+                }
+                
+                recipient = truncateAddress(tx.to);
+
+                return `
+                    <div class="tx-row">
+                        <div>${formatDate(timestamp)}</div>
+                        <div><span class="tx-type ${typeClass}">${type.toUpperCase()}</span></div>
+                        <div>
+                            ${txHash ? `<a href="${BASESCAN_URL}${txHash}" target="_blank" class="tx-hash">${truncateAddress(txHash)}</a>` : '-'}
+                        </div>
+                        <div class="recipient">${recipient}</div>
+                        <div class="amount">${amount}</div>
+                    </div>
+                `;
+            }).join('');
+
+            txList.innerHTML = html;
+            
+            // Update stats
+            document.getElementById('totalTx').textContent = transactions.length;
+            document.getElementById('totalIn').textContent = totalIn.toFixed(2);
+            document.getElementById('totalOut').textContent = totalOut.toFixed(2);
+        }
+
+        async function init() {
+            const transactions = await fetchTransactions();
+            renderTransactions(transactions);
+        }
+
+        init();
+    </script>
+</body>
+</html>
