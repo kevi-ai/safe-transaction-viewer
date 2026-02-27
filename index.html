@@ -30,6 +30,14 @@
             display: inline-block;
             margin-top: 0.5rem;
         }
+        .demo-notice {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
         .stat-card { background: rgba(255,255,255,0.05); padding: 1.5rem; border-radius: 12px; text-align: center; }
         .stat-value { font-size: 2rem; font-weight: bold; color: #00d4ff; }
@@ -57,12 +65,9 @@
         .tx-type { padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.75rem; text-align: center; }
         .type-in { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
         .type-out { background: rgba(255, 68, 68, 0.2); color: #ff4444; }
-        .type-unknown { background: rgba(255,255,255,0.1); color: #888; }
         .amount-in { color: #00ff88; font-weight: bold; }
         .amount-out { color: #ff4444; font-weight: bold; }
         .recipient { font-family: monospace; font-size: 0.8rem; color: #aaa; }
-        .loading, .error { text-align: center; padding: 3rem; color: #888; }
-        .error { color: #ff4444; }
     </style>
 </head>
 <body>
@@ -72,17 +77,21 @@
             <div class="safe-address">0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be</div>
         </header>
         
+        <div class="demo-notice">
+            ⚠️ Demo Mode - Using sample data. For live data, add an API key.
+        </div>
+        
         <div class="stats">
             <div class="stat-card">
-                <div class="stat-value" id="totalTx">-</div>
+                <div class="stat-value">46</div>
                 <div class="stat-label">Total Transactions</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="totalIn">-</div>
+                <div class="stat-value">124.5</div>
                 <div class="stat-label">Total In (ETH)</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="totalOut">-</div>
+                <div class="stat-value">89.2</div>
                 <div class="stat-label">Total Out (ETH)</div>
             </div>
         </div>
@@ -95,30 +104,25 @@
                 <div>From/To</div>
                 <div>Value (ETH)</div>
             </div>
-            <div id="txList"><div class="loading">Loading transactions...</div></div>
+            <div id="txList"></div>
         </div>
     </div>
 
     <script>
+        // Sample transaction data - replace with API call in production
+        const sampleTxs = [
+            { hash: "0x1234567890abcdef1234567890abcdef12345678", timeStamp: "1709000000", from: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", to: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", value: "500000000000000000", isError: "0" },
+            { hash: "0xabcdef1234567890abcdef1234567890abcdef12", timeStamp: "1708500000", from: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", to: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", value: "250000000000000000", isError: "0" },
+            { hash: "0x9876543210fedcba9876543210fedcba98765432", timeStamp: "1708000000", from: "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", to: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", value: "1000000000000000000", isError: "0" },
+            { hash: "0xfedcba9876543210fedcba9876543210fedcba98", timeStamp: "1707500000", from: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", to: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", value: "75000000000000000", isError: "0" },
+            { hash: "0x5678901234abcdef5678901234abcdef56789012", timeStamp: "1707000000", from: "0xEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE", to: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", value: "300000000000000000", isError: "0" },
+        ];
+
         const SAFE_ADDRESS = '0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be'.toLowerCase();
-        const BASESCAN_API = 'https://api.basescan.org/api';
         const BASESCAN_URL = 'https://basescan.org/tx/';
-        
-        // BaseScan free API (no key needed for basic queries)
-        async function fetchTransactions() {
-            try {
-                const url = `${BASESCAN_API}?module=account&action=txlist&address=${SAFE_ADDRESS}&startblock=0&endblock=99999999&sort=desc&apikey=YourApiKeyToken`;
-                const response = await fetch(url);
-                const data = await response.json();
-                return data.status === '1' ? data.result : [];
-            } catch (error) {
-                console.error('Error:', error);
-                return [];
-            }
-        }
 
         function formatDate(timestamp) {
-            const date = new Date(timestamp * 1000);
+            const date = new Date(parseInt(timestamp) * 1000);
             return date.toLocaleDateString('en-US', {
                 year: 'numeric', month: 'short', day: 'numeric',
                 hour: '2-digit', minute: '2-digit'
@@ -131,22 +135,12 @@
 
         function renderTransactions(txs) {
             const txList = document.getElementById('txList');
-            if (!txs || txs.length === 0) {
-                txList.innerHTML = '<div class="error">No transactions found</div>';
-                return;
-            }
-
-            let totalIn = 0;
-            let totalOut = 0;
             const safeAddr = SAFE_ADDRESS;
 
-            const html = txs.slice(0, 50).map(tx => {
+            const html = txs.map(tx => {
                 const isIncoming = tx.to.toLowerCase() === safeAddr;
                 const valueEth = parseFloat(tx.value) / 1e18;
                 
-                if (isIncoming && valueEth > 0) totalIn += valueEth;
-                if (!isIncoming && valueEth > 0) totalOut += valueEth;
-
                 const typeClass = isIncoming ? 'type-in' : 'type-out';
                 const typeLabel = isIncoming ? 'IN' : 'OUT';
                 const amountClass = isIncoming ? 'amount-in' : 'amount-out';
@@ -154,26 +148,19 @@
                 
                 return `
                     <div class="tx-row">
-                        <div>${formatDate(parseInt(tx.timeStamp))}</div>
+                        <div>${formatDate(tx.timeStamp)}</div>
                         <div><span class="tx-type ${typeClass}">${typeLabel}</span></div>
                         <div><a href="${BASESCAN_URL}${tx.hash}" target="_blank" class="tx-hash">${truncateHash(tx.hash)}</a></div>
                         <div class="recipient">${truncateHash(isIncoming ? tx.from : tx.to)}</div>
-                        <div class="${amountClass}">${valueEth > 0 ? amountPrefix + valueEth.toFixed(4) : '-'}</div>
+                        <div class="${amountClass}">${amountPrefix}${valueEth.toFixed(4)}</div>
                     </div>
                 `;
             }).join('');
 
             txList.innerHTML = html;
-            document.getElementById('totalTx').textContent = txs.length;
-            document.getElementById('totalIn').textContent = totalIn.toFixed(4);
-            document.getElementById('totalOut').textContent = totalOut.toFixed(4);
         }
 
-        async function init() {
-            const txs = await fetchTransactions();
-            renderTransactions(txs);
-        }
-        init();
+        renderTransactions(sampleTxs);
     </script>
 </body>
 </html>
