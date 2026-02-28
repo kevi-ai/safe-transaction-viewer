@@ -68,8 +68,9 @@
         .amount-in { color: #00ff88; font-weight: bold; }
         .amount-out { color: #ff4444; font-weight: bold; }
         .recipient { font-family: monospace; font-size: 0.8rem; color: #aaa; }
-        .loading, .error { text-align: center; padding: 3rem; color: #888; }
+        .loading, .error, .debug { text-align: center; padding: 3rem; color: #888; }
         .error { color: #ff4444; }
+        .debug { color: #ffaa00; font-size: 0.8rem; }
     </style>
 </head>
 <body>
@@ -106,7 +107,7 @@
                 <div>From/To</div>
                 <div>Value (ETH)</div>
             </div>
-            <div id="txList"><div class="loading">Loading transactions from Base blockchain...</div></div>
+            <div id="txList"><div class="loading">Loading transactions from Base blockchain...</div><div class="debug" id="debugMsg"></div></div>
         </div>
     </div>
 
@@ -119,8 +120,14 @@
             for (let i = 0; i < retries; i++) {
                 try {
                     const response = await fetch(url, options);
-                    return await response.json();
+                    const data = await response.json();
+                    if (data.error) {
+                        document.getElementById('debugMsg').textContent = 'Error: ' + JSON.stringify(data.error);
+                        throw new Error(data.error.message || JSON.stringify(data.error));
+                    }
+                    return data;
                 } catch (e) {
+                    document.getElementById('debugMsg').textContent = 'Attempt ' + (i+1) + ' failed: ' + e.message;
                     if (i === retries - 1) throw e;
                     await new Promise(r => setTimeout(r, 1000));
                 }
