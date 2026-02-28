@@ -81,7 +81,7 @@
         </header>
         
         <div class="live-notice">
-            🔴 LIVE DATA - Using Base RPC
+            🔴 LIVE DATA - Using Base WebSocket RPC
         </div>
         
         <div class="stats">
@@ -107,117 +107,129 @@
                 <div>From/To</div>
                 <div>Value (ETH)</div>
             </div>
-            <div id="txList"><div class="loading">Loading transactions from Base blockchain...</div><div class="debug" id="debugMsg"></div></div>
+            <div id="txList"><div class="loading">Connecting to Base blockchain via WebSocket...</div><div class="debug" id="debugMsg"></div></div>
         </div>
     </div>
 
     <script>
         const SAFE_ADDRESS = '0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be'.toLowerCase();
-        const RPC_URL = 'https://base.api.pocket.network';
+        const RPC_WS = 'wss://base.drpc.org';
         const BASESCAN_URL = 'https://basescan.org/tx/';
         
-        async function fetchWithRetry(url, options, retries = 3) {
-            for (let i = 0; i < retries; i++) {
-                try {
-                    const response = await fetch(url, options);
-                    const data = await response.json();
-                    if (data.error) {
-                        document.getElementById('debugMsg').textContent = 'Error: ' + JSON.stringify(data.error);
-                        throw new Error(data.error.message || JSON.stringify(data.error));
+        let ws;
+        let requestId = 1;
+        const pendingRequests = {};
+        
+        function sendRPC(method, params) {
+            return new Promise((resolve, reject) => {
+                const id = requestId++;
+                const payload = { jsonrpc: '2.0', method, params, id };
+                pendingRequests[id] = { resolve, reject };
+                
+                ws.send(JSON.stringify(payload));
+                
+                // Timeout after 10 seconds
+                setTimeout(() => {
+                    if (pendingRequests[id]) {
+                        delete pendingRequests[id];
+                        reject(new Error('Request timeout'));
                     }
-                    return data;
+                }, 10000);
+            });
+        }
+        
+        async function initWebSocket() {
+            return new Promise((resolve, reject) => {
+                try {
+                    ws = new WebSocket(RPC_WS);
+                    
+                    ws.onopen = () => {
+                        document.getElementById('debugMsg').textContent = 'Connected! Fetching transactions...';
+                        resolve();
+                    };
+                    
+                    ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.id && pendingRequests[data.id]) {
+                            const { resolve } = pendingRequests[data.id];
+                            delete pendingRequests[data.id];
+                            resolve(data);
+                        }
+                    };
+                    
+                    ws.onerror = (error) => {
+                        document.getElementById('debugMsg').textContent = 'WebSocket error: ' + error.message;
+                        reject(error);
+                    };
+                    
+                    ws.onclose = () => {
+                        document.getElementById('debugMsg').textContent = 'WebSocket disconnected';
+                    };
                 } catch (e) {
-                    document.getElementById('debugMsg').textContent = 'Attempt ' + (i+1) + ' failed: ' + e.message;
-                    if (i === retries - 1) throw e;
-                    await new Promise(r => setTimeout(r, 1000));
+                    document.getElementById('debugMsg').textContent = 'Connection error: ' + e.message;
+                    reject(e);
                 }
-            }
+            });
         }
 
         async function fetchBlockByNumber(blockNum) {
-            const result = await fetchWithRetry(RPC_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0',
-                    method: 'eth_getBlockByNumber',
-                    params: [blockNum, false],
-                    id: 1
-                })
-            });
+            const result = await sendRPC('eth_getBlockByNumber', [blockNum, false]);
+            if (result.error) throw new Error(result.error.message);
             return result.result;
         }
 
         async function fetchTransactions() {
             try {
+                // Connect to WebSocket
+                await initWebSocket();
+                
                 // Get the latest block number
-                const blockResult = await fetchWithRetry(RPC_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jsonrpc: '2.0',
-                        method: 'eth_blockNumber',
-                        params: [],
-                        id: 1
-                    })
-                });
-                
+                const blockResult = await sendRPC('eth_blockNumber');
                 const latestBlock = parseInt(blockResult.result, 16);
-                const startBlock = Math.max(0, latestBlock - 10000); // Get last 10000 blocks
+                const startBlock = Math.max(0, latestBlock - 10000);
                 
-                // Get logs for the Safe address (transfers and other events)
-                const logsResult = await fetchWithRetry(RPC_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        jsonrpc: '2.0',
-                        method: 'eth_getLogs',
-                        params: [{
-                            fromBlock: '0x' + startBlock.toString(16),
-                            toBlock: 'latest',
-                            address: SAFE_ADDRESS
-                        }],
-                        id: 1
-                    })
-                });
+                document.getElementById('debugMsg').textContent = `Fetching logs from block ${startBlock} to ${latestBlock}...`;
                 
-                if (!logsResult.result || logsResult.result.length === 0) {
+                // Get logs for the Safe address
+                const logsResult = await sendRPC('eth_getLogs', [{
+                    fromBlock: '0x' + startBlock.toString(16),
+                    toBlock: 'latest',
+                    address: SAFE_ADDRESS
+                }]);
+                
+                if (logsResult.error) throw new Error(logsResult.error.message);
+                
+                const logs = logsResult.result || [];
+                document.getElementById('debugMsg').textContent = `Found ${logs.length} events, processing...`;
+                
+                if (logs.length === 0) {
                     return [];
                 }
                 
-                // Get block timestamps and process logs
-                const blocks = {};
-                const uniqueTxs = {};
-                
                 // Get unique transaction hashes and their block numbers
-                for (const log of logsResult.result) {
+                const uniqueTxs = {};
+                const blockNumbers = new Set();
+                
+                for (const log of logs) {
                     if (!uniqueTxs[log.transactionHash]) {
                         uniqueTxs[log.transactionHash] = log.blockNumber;
-                        blocks[log.blockNumber] = null;
+                        blockNumbers.add(log.blockNumber);
                     }
                 }
                 
                 // Fetch block data for timestamps
-                const blockNumbers = Object.keys(blocks);
-                const batchSize = 50;
-                for (let i = 0; i < blockNumbers.length; i += batchSize) {
-                    const batch = blockNumbers.slice(i, i + batchSize);
-                    const promises = batch.map(b => 
-                        fetchWithRetry(RPC_URL, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                jsonrpc: '2.0',
-                                method: 'eth_getBlockByNumber',
-                                params: [b, false],
-                                id: 1
-                            })
-                        })
-                    );
-                    const results = await Promise.all(promises);
-                    results.forEach((r, idx) => {
-                        blocks[batch[idx]] = r.result;
-                    });
+                const blocks = {};
+                const sortedBlocks = Array.from(blockNumbers).sort((a, b) => parseInt(a, 16) - parseInt(b, 16));
+                
+                for (const blockNum of sortedBlocks) {
+                    try {
+                        const blockData = await sendRPC('eth_getBlockByNumber', [blockNum, false]);
+                        if (blockData.result) {
+                            blocks[blockNum] = blockData.result;
+                        }
+                    } catch (e) {
+                        // Continue even if one block fails
+                    }
                 }
                 
                 // Build transaction list
@@ -226,7 +238,7 @@
                     const block = blocks[blockNum];
                     if (!block) continue;
                     
-                    const log = logsResult.result.find(l => l.transactionHash === txHash);
+                    const log = logs.find(l => l.transactionHash === txHash);
                     if (!log) continue;
                     
                     txs.push({
@@ -234,7 +246,7 @@
                         blockNumber: blockNum,
                         timestamp: parseInt(block.timestamp, 16),
                         from: log.topics[1] ? '0x' + log.topics[1].slice(26) : log.from,
-                        to: log.address === SAFE_ADDRESS ? log.topics[2] ? '0x' + log.topics[2].slice(26) : log.to : SAFE_ADDRESS,
+                        to: log.address === SAFE_ADDRESS ? (log.topics[2] ? '0x' + log.topics[2].slice(26) : log.to) : SAFE_ADDRESS,
                         value: log.data
                     });
                 }
@@ -242,10 +254,16 @@
                 // Sort by timestamp descending
                 txs.sort((a, b) => b.timestamp - a.timestamp);
                 
+                document.getElementById('debugMsg').textContent = `Processed ${txs.length} transactions!`;
+                
+                // Close WebSocket
+                ws.close();
+                
                 return txs;
                 
             } catch (error) {
-                console.error('Error fetching transactions:', error);
+                document.getElementById('debugMsg').textContent = 'Error: ' + error.message;
+                console.error(error);
                 return [];
             }
         }
