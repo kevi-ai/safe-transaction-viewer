@@ -30,9 +30,9 @@
             display: inline-block;
             margin-top: 0.5rem;
         }
-        .demo-notice {
-            background: rgba(255, 193, 7, 0.2);
-            color: #ffc107;
+        .live-notice {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
             padding: 1rem;
             border-radius: 8px;
             margin-bottom: 1rem;
@@ -68,6 +68,8 @@
         .amount-in { color: #00ff88; font-weight: bold; }
         .amount-out { color: #ff4444; font-weight: bold; }
         .recipient { font-family: monospace; font-size: 0.8rem; color: #aaa; }
+        .loading, .error { text-align: center; padding: 3rem; color: #888; }
+        .error { color: #ff4444; }
     </style>
 </head>
 <body>
@@ -77,21 +79,21 @@
             <div class="safe-address">0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be</div>
         </header>
         
-        <div class="demo-notice">
-            ⚠️ Demo Mode - Using sample data. For live data, add an API key.
+        <div class="live-notice">
+            🔴 LIVE DATA - Using Base RPC
         </div>
         
         <div class="stats">
             <div class="stat-card">
-                <div class="stat-value">46</div>
+                <div class="stat-value" id="totalTx">-</div>
                 <div class="stat-label">Total Transactions</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">124.5</div>
+                <div class="stat-value" id="totalIn">-</div>
                 <div class="stat-label">Total In (ETH)</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">89.2</div>
+                <div class="stat-value" id="totalOut">-</div>
                 <div class="stat-label">Total Out (ETH)</div>
             </div>
         </div>
@@ -104,25 +106,145 @@
                 <div>From/To</div>
                 <div>Value (ETH)</div>
             </div>
-            <div id="txList"></div>
+            <div id="txList"><div class="loading">Loading transactions from Base blockchain...</div></div>
         </div>
     </div>
 
     <script>
-        // Sample transaction data - replace with API call in production
-        const sampleTxs = [
-            { hash: "0x1234567890abcdef1234567890abcdef12345678", timeStamp: "1709000000", from: "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", to: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", value: "500000000000000000", isError: "0" },
-            { hash: "0xabcdef1234567890abcdef1234567890abcdef12", timeStamp: "1708500000", from: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", to: "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", value: "250000000000000000", isError: "0" },
-            { hash: "0x9876543210fedcba9876543210fedcba98765432", timeStamp: "1708000000", from: "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC", to: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", value: "1000000000000000000", isError: "0" },
-            { hash: "0xfedcba9876543210fedcba9876543210fedcba98", timeStamp: "1707500000", from: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", to: "0xDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", value: "75000000000000000", isError: "0" },
-            { hash: "0x5678901234abcdef5678901234abcdef56789012", timeStamp: "1707000000", from: "0xEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE", to: "0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be", value: "300000000000000000", isError: "0" },
-        ];
-
         const SAFE_ADDRESS = '0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be'.toLowerCase();
+        const RPC_URL = 'https://base.publicnode.com';
         const BASESCAN_URL = 'https://basescan.org/tx/';
+        
+        async function fetchWithRetry(url, options, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    return await response.json();
+                } catch (e) {
+                    if (i === retries - 1) throw e;
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+        }
+
+        async function fetchBlockByNumber(blockNum) {
+            const result = await fetchWithRetry(RPC_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'eth_getBlockByNumber',
+                    params: [blockNum, false],
+                    id: 1
+                })
+            });
+            return result.result;
+        }
+
+        async function fetchTransactions() {
+            try {
+                // Get the latest block number
+                const blockResult = await fetchWithRetry(RPC_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: 'eth_blockNumber',
+                        params: [],
+                        id: 1
+                    })
+                });
+                
+                const latestBlock = parseInt(blockResult.result, 16);
+                const startBlock = Math.max(0, latestBlock - 10000); // Get last 10000 blocks
+                
+                // Get logs for the Safe address (transfers and other events)
+                const logsResult = await fetchWithRetry(RPC_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: 'eth_getLogs',
+                        params: [{
+                            fromBlock: '0x' + startBlock.toString(16),
+                            toBlock: 'latest',
+                            address: SAFE_ADDRESS
+                        }],
+                        id: 1
+                    })
+                });
+                
+                if (!logsResult.result || logsResult.result.length === 0) {
+                    return [];
+                }
+                
+                // Get block timestamps and process logs
+                const blocks = {};
+                const uniqueTxs = {};
+                
+                // Get unique transaction hashes and their block numbers
+                for (const log of logsResult.result) {
+                    if (!uniqueTxs[log.transactionHash]) {
+                        uniqueTxs[log.transactionHash] = log.blockNumber;
+                        blocks[log.blockNumber] = null;
+                    }
+                }
+                
+                // Fetch block data for timestamps
+                const blockNumbers = Object.keys(blocks);
+                const batchSize = 50;
+                for (let i = 0; i < blockNumbers.length; i += batchSize) {
+                    const batch = blockNumbers.slice(i, i + batchSize);
+                    const promises = batch.map(b => 
+                        fetchWithRetry(RPC_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                jsonrpc: '2.0',
+                                method: 'eth_getBlockByNumber',
+                                params: [b, false],
+                                id: 1
+                            })
+                        })
+                    );
+                    const results = await Promise.all(promises);
+                    results.forEach((r, idx) => {
+                        blocks[batch[idx]] = r.result;
+                    });
+                }
+                
+                // Build transaction list
+                const txs = [];
+                for (const [txHash, blockNum] of Object.entries(uniqueTxs)) {
+                    const block = blocks[blockNum];
+                    if (!block) continue;
+                    
+                    const log = logsResult.result.find(l => l.transactionHash === txHash);
+                    if (!log) continue;
+                    
+                    txs.push({
+                        hash: txHash,
+                        blockNumber: blockNum,
+                        timestamp: parseInt(block.timestamp, 16),
+                        from: log.topics[1] ? '0x' + log.topics[1].slice(26) : log.from,
+                        to: log.address === SAFE_ADDRESS ? log.topics[2] ? '0x' + log.topics[2].slice(26) : log.to : SAFE_ADDRESS,
+                        value: log.data
+                    });
+                }
+                
+                // Sort by timestamp descending
+                txs.sort((a, b) => b.timestamp - a.timestamp);
+                
+                return txs;
+                
+            } catch (error) {
+                console.error('Error fetching transactions:', error);
+                return [];
+            }
+        }
 
         function formatDate(timestamp) {
-            const date = new Date(parseInt(timestamp) * 1000);
+            const date = new Date(timestamp * 1000);
             return date.toLocaleDateString('en-US', {
                 year: 'numeric', month: 'short', day: 'numeric',
                 hour: '2-digit', minute: '2-digit'
@@ -135,12 +257,25 @@
 
         function renderTransactions(txs) {
             const txList = document.getElementById('txList');
+            if (!txs || txs.length === 0) {
+                txList.innerHTML = '<div class="error">No transactions found</div>';
+                return;
+            }
+
+            let totalIn = 0;
+            let totalOut = 0;
             const safeAddr = SAFE_ADDRESS;
 
-            const html = txs.map(tx => {
-                const isIncoming = tx.to.toLowerCase() === safeAddr;
-                const valueEth = parseFloat(tx.value) / 1e18;
+            const html = txs.slice(0, 50).map(tx => {
+                const toAddr = tx.to ? tx.to.toLowerCase() : '0x';
+                const fromAddr = tx.from ? tx.from.toLowerCase() : '0x';
                 
+                const isIncoming = toAddr === safeAddr;
+                const valueEth = parseInt(tx.value, 16) / 1e18;
+                
+                if (isIncoming && valueEth > 0) totalIn += valueEth;
+                if (!isIncoming && valueEth > 0) totalOut += valueEth;
+
                 const typeClass = isIncoming ? 'type-in' : 'type-out';
                 const typeLabel = isIncoming ? 'IN' : 'OUT';
                 const amountClass = isIncoming ? 'amount-in' : 'amount-out';
@@ -148,19 +283,26 @@
                 
                 return `
                     <div class="tx-row">
-                        <div>${formatDate(tx.timeStamp)}</div>
+                        <div>${formatDate(tx.timestamp)}</div>
                         <div><span class="tx-type ${typeClass}">${typeLabel}</span></div>
                         <div><a href="${BASESCAN_URL}${tx.hash}" target="_blank" class="tx-hash">${truncateHash(tx.hash)}</a></div>
-                        <div class="recipient">${truncateHash(isIncoming ? tx.from : tx.to)}</div>
-                        <div class="${amountClass}">${amountPrefix}${valueEth.toFixed(4)}</div>
+                        <div class="recipient">${truncateHash(isIncoming ? fromAddr : toAddr)}</div>
+                        <div class="${amountClass}">${valueEth > 0 ? amountPrefix + valueEth.toFixed(4) : '-'}</div>
                     </div>
                 `;
             }).join('');
 
             txList.innerHTML = html;
+            document.getElementById('totalTx').textContent = txs.length;
+            document.getElementById('totalIn').textContent = totalIn.toFixed(4);
+            document.getElementById('totalOut').textContent = totalOut.toFixed(4);
         }
 
-        renderTransactions(sampleTxs);
+        async function init() {
+            const txs = await fetchTransactions();
+            renderTransactions(txs);
+        }
+        init();
     </script>
 </body>
 </html>
