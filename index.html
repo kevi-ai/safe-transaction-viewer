@@ -68,7 +68,7 @@
         .amount-in { color: #00ff88; font-weight: bold; }
         .amount-out { color: #ff4444; font-weight: bold; }
         .recipient { font-family: monospace; font-size: 0.8rem; color: #aaa; }
-        .loading, .error, .debug { text-align: center; padding: 3rem; color: #888; }
+        .loading, .error, .debug { text-align: center; padding: 1rem; color: #888; }
         .error { color: #ff4444; }
         .debug { color: #ffaa00; font-size: 0.8rem; }
     </style>
@@ -81,8 +81,10 @@
         </header>
         
         <div class="live-notice">
-            🔴 LIVE DATA - Using Base WebSocket RPC
+            🔴 LIVE DATA - Using Safe API
         </div>
+        
+        <div class="debug" id="debugMsg">Loading transactions...</div>
         
         <div class="stats">
             <div class="stat-card">
@@ -91,11 +93,11 @@
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="totalIn">-</div>
-                <div class="stat-label">Total In (ETH)</div>
+                <div class="stat-label">Total TX</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="totalOut">-</div>
-                <div class="stat-label">Total Out (ETH)</div>
+                <div class="stat-label">Pending</div>
             </div>
         </div>
 
@@ -105,161 +107,44 @@
                 <div>Type</div>
                 <div>Hash</div>
                 <div>From/To</div>
-                <div>Value (ETH)</div>
+                <div>Status</div>
             </div>
-            <div id="txList"><div class="loading">Connecting to Base blockchain via WebSocket...</div><div class="debug" id="debugMsg"></div></div>
+            <div id="txList"><div class="loading">Loading...</div></div>
         </div>
     </div>
 
     <script>
-        const SAFE_ADDRESS = '0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be'.toLowerCase();
-        const RPC_WS = 'wss://base.drpc.org';
+        const SAFE_ADDRESS = '0x26B7805Dd8aEc26DA55fc8e0c659cf6822b740Be';
+        const SAFE_API = 'https://safe-transaction-base.safe.global/api/v1';
         const BASESCAN_URL = 'https://basescan.org/tx/';
         
-        let ws;
-        let requestId = 1;
-        const pendingRequests = {};
-        
-        function sendRPC(method, params) {
-            return new Promise((resolve, reject) => {
-                const id = requestId++;
-                const payload = { jsonrpc: '2.0', method, params, id };
-                pendingRequests[id] = { resolve, reject };
-                
-                ws.send(JSON.stringify(payload));
-                
-                // Timeout after 10 seconds
-                setTimeout(() => {
-                    if (pendingRequests[id]) {
-                        delete pendingRequests[id];
-                        reject(new Error('Request timeout'));
-                    }
-                }, 10000);
-            });
-        }
-        
-        async function initWebSocket() {
-            return new Promise((resolve, reject) => {
-                try {
-                    ws = new WebSocket(RPC_WS);
-                    
-                    ws.onopen = () => {
-                        document.getElementById('debugMsg').textContent = 'Connected! Fetching transactions...';
-                        resolve();
-                    };
-                    
-                    ws.onmessage = (event) => {
-                        const data = JSON.parse(event.data);
-                        if (data.id && pendingRequests[data.id]) {
-                            const { resolve } = pendingRequests[data.id];
-                            delete pendingRequests[data.id];
-                            resolve(data);
-                        }
-                    };
-                    
-                    ws.onerror = (error) => {
-                        document.getElementById('debugMsg').textContent = 'WebSocket error: ' + error.message;
-                        reject(error);
-                    };
-                    
-                    ws.onclose = () => {
-                        document.getElementById('debugMsg').textContent = 'WebSocket disconnected';
-                    };
-                } catch (e) {
-                    document.getElementById('debugMsg').textContent = 'Connection error: ' + e.message;
-                    reject(e);
-                }
-            });
-        }
+        const API_TOKEN = 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzYWZlLWF1dGgtc2VydmljZSIsInN1YiI6IjY2YTZjNjQ5MDU3ODRmOGJhNWY2ZmRhYTA0NzM0NTdmXzZkMDVjZmMyYWI0NjQ1ZjlhMzlkMDYwYzE3NjNjNTMwIiwia2V5IjoiNjZhNmM2NDkwNTc4NGY4YmE1ZjZmZGFhMDQ3MzQ1N2ZfNmQwNWNmYzJhYjQ2NDVmOWEzOWQwNjBjMTc2M2M1MzAiLCJhdWQiOlsic2FmZS1hdXRoLXNlcnZpY2UiXSwiZXhwIjoxODAzODM5MzAxLCJyb2xlcyI6W10sImRhdGEiOnt9fQ.cg-GcUW0otyqXIkjTcKzBUrzLW6X7XJVP2QRseypW1nFbp4nxYL_SnuOd6v55keCJFYIfe6oK2OdiZYYpspnlQ';
 
-        async function fetchBlockByNumber(blockNum) {
-            const result = await sendRPC('eth_getBlockByNumber', [blockNum, false]);
-            if (result.error) throw new Error(result.error.message);
-            return result.result;
-        }
-
-        async function fetchTransactions() {
+        async function fetchSafeTransactions() {
             try {
-                // Connect to WebSocket
-                await initWebSocket();
+                document.getElementById('debugMsg').textContent = 'Fetching from Safe API...';
                 
-                // Get the latest block number
-                const blockResult = await sendRPC('eth_blockNumber');
-                const latestBlock = parseInt(blockResult.result, 16);
-                const startBlock = Math.max(0, latestBlock - 10000);
+                const headers = {
+                    'Authorization': `Bearer ${API_TOKEN}`,
+                    'Content-Type': 'application/json'
+                };
                 
-                document.getElementById('debugMsg').textContent = `Fetching logs from block ${startBlock} to ${latestBlock}...`;
+                // Get Safe info first
+                const safeResp = await fetch(`${SAFE_API}/safes/${SAFE_ADDRESS}/`, { headers });
+                const safeData = await safeResp.json();
+                document.getElementById('debugMsg').textContent = 'Safe found, fetching transactions...';
                 
-                // Get logs for the Safe address
-                const logsResult = await sendRPC('eth_getLogs', [{
-                    fromBlock: '0x' + startBlock.toString(16),
-                    toBlock: 'latest',
-                    address: SAFE_ADDRESS
-                }]);
+                // Get transactions
+                const txResp = await fetch(`${SAFE_API}/transactions/?safe=${SAFE_ADDRESS}&ordering=-timestamp`, { headers });
+                const txData = await txResp.json();
                 
-                if (logsResult.error) throw new Error(logsResult.error.message);
-                
-                const logs = logsResult.result || [];
-                document.getElementById('debugMsg').textContent = `Found ${logs.length} events, processing...`;
-                
-                if (logs.length === 0) {
+                if (!txData.results) {
+                    document.getElementById('debugMsg').textContent = 'No transactions found';
                     return [];
                 }
                 
-                // Get unique transaction hashes and their block numbers
-                const uniqueTxs = {};
-                const blockNumbers = new Set();
-                
-                for (const log of logs) {
-                    if (!uniqueTxs[log.transactionHash]) {
-                        uniqueTxs[log.transactionHash] = log.blockNumber;
-                        blockNumbers.add(log.blockNumber);
-                    }
-                }
-                
-                // Fetch block data for timestamps
-                const blocks = {};
-                const sortedBlocks = Array.from(blockNumbers).sort((a, b) => parseInt(a, 16) - parseInt(b, 16));
-                
-                for (const blockNum of sortedBlocks) {
-                    try {
-                        const blockData = await sendRPC('eth_getBlockByNumber', [blockNum, false]);
-                        if (blockData.result) {
-                            blocks[blockNum] = blockData.result;
-                        }
-                    } catch (e) {
-                        // Continue even if one block fails
-                    }
-                }
-                
-                // Build transaction list
-                const txs = [];
-                for (const [txHash, blockNum] of Object.entries(uniqueTxs)) {
-                    const block = blocks[blockNum];
-                    if (!block) continue;
-                    
-                    const log = logs.find(l => l.transactionHash === txHash);
-                    if (!log) continue;
-                    
-                    txs.push({
-                        hash: txHash,
-                        blockNumber: blockNum,
-                        timestamp: parseInt(block.timestamp, 16),
-                        from: log.topics[1] ? '0x' + log.topics[1].slice(26) : log.from,
-                        to: log.address === SAFE_ADDRESS ? (log.topics[2] ? '0x' + log.topics[2].slice(26) : log.to) : SAFE_ADDRESS,
-                        value: log.data
-                    });
-                }
-                
-                // Sort by timestamp descending
-                txs.sort((a, b) => b.timestamp - a.timestamp);
-                
-                document.getElementById('debugMsg').textContent = `Processed ${txs.length} transactions!`;
-                
-                // Close WebSocket
-                ws.close();
-                
-                return txs;
+                document.getElementById('debugMsg').textContent = `Found ${txData.results.length} transactions!`;
+                return txData.results;
                 
             } catch (error) {
                 document.getElementById('debugMsg').textContent = 'Error: ' + error.message;
@@ -269,7 +154,8 @@
         }
 
         function formatDate(timestamp) {
-            const date = new Date(timestamp * 1000);
+            if (!timestamp) return '-';
+            const date = new Date(timestamp);
             return date.toLocaleDateString('en-US', {
                 year: 'numeric', month: 'short', day: 'numeric',
                 hour: '2-digit', minute: '2-digit'
@@ -277,6 +163,7 @@
         }
 
         function truncateHash(hash) {
+            if (!hash) return '-';
             return hash.slice(0, 10) + '...' + hash.slice(-8);
         }
 
@@ -287,44 +174,33 @@
                 return;
             }
 
-            let totalIn = 0;
-            let totalOut = 0;
-            const safeAddr = SAFE_ADDRESS;
-
             const html = txs.slice(0, 50).map(tx => {
-                const toAddr = tx.to ? tx.to.toLowerCase() : '0x';
-                const fromAddr = tx.from ? tx.from.toLowerCase() : '0x';
+                const isExecuted = tx.executionDate != null;
+                const type = tx.txType || 'UNKNOWN';
+                const hash = tx.transactionHash || tx.safeTxHash;
                 
-                const isIncoming = toAddr === safeAddr;
-                const valueEth = parseInt(tx.value, 16) / 1e18;
-                
-                if (isIncoming && valueEth > 0) totalIn += valueEth;
-                if (!isIncoming && valueEth > 0) totalOut += valueEth;
-
-                const typeClass = isIncoming ? 'type-in' : 'type-out';
-                const typeLabel = isIncoming ? 'IN' : 'OUT';
-                const amountClass = isIncoming ? 'amount-in' : 'amount-out';
-                const amountPrefix = isIncoming ? '+' : '-';
+                const typeClass = isExecuted ? 'type-in' : 'type-out';
+                const statusLabel = isExecuted ? 'EXECUTED' : 'PENDING';
                 
                 return `
                     <div class="tx-row">
-                        <div>${formatDate(tx.timestamp)}</div>
-                        <div><span class="tx-type ${typeClass}">${typeLabel}</span></div>
-                        <div><a href="${BASESCAN_URL}${tx.hash}" target="_blank" class="tx-hash">${truncateHash(tx.hash)}</a></div>
-                        <div class="recipient">${truncateHash(isIncoming ? fromAddr : toAddr)}</div>
-                        <div class="${amountClass}">${valueEth > 0 ? amountPrefix + valueEth.toFixed(4) : '-'}</div>
+                        <div>${formatDate(tx.executionDate || tx.submissionDate)}</div>
+                        <div><span class="tx-type ${typeClass}">${type}</span></div>
+                        <div><a href="${BASESCAN_URL}${hash}" target="_blank" class="tx-hash">${truncateHash(hash)}</a></div>
+                        <div class="recipient">${truncateHash(tx.to || tx.safe)}</div>
+                        <div><span class="tx-type ${typeClass}">${statusLabel}</span></div>
                     </div>
                 `;
             }).join('');
 
             txList.innerHTML = html;
             document.getElementById('totalTx').textContent = txs.length;
-            document.getElementById('totalIn').textContent = totalIn.toFixed(4);
-            document.getElementById('totalOut').textContent = totalOut.toFixed(4);
+            document.getElementById('totalIn').textContent = txs.filter(t => t.executionDate).length;
+            document.getElementById('totalOut').textContent = txs.filter(t => !t.executionDate).length;
         }
 
         async function init() {
-            const txs = await fetchTransactions();
+            const txs = await fetchSafeTransactions();
             renderTransactions(txs);
         }
         init();
